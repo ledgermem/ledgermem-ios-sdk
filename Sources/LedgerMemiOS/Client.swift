@@ -105,7 +105,9 @@ public actor LedgerMemClient {
     }
 
     private static func isRetryable(status: Int) -> Bool {
-        status == 429 || (500..<600).contains(status)
+        // 501 Not Implemented is permanent — retrying wastes round-trips.
+        if status == 501 { return false }
+        return status == 429 || (500..<600).contains(status)
     }
 
     private static func retryDelayNs(attempt: Int) -> UInt64 {
@@ -114,21 +116,35 @@ public actor LedgerMemClient {
         return UInt64.random(in: 0...capped)
     }
 
+    /// Parse the server's Retry-After header (delta-seconds form), capped
+    /// at `retryMaxDelayNs` so a hostile server cannot stall the client.
+    private static func retryAfterNs(from response: HTTPURLResponse) -> UInt64? {
+        let raw = (response.value(forHTTPHeaderField: "Retry-After")
+            ?? response.value(forHTTPHeaderField: "retry-after"))?
+            .trimmingCharacters(in: .whitespaces)
+        guard let raw, !raw.isEmpty, let secs = UInt64(raw) else { return nil }
+        let ns = secs.multipliedReportingOverflow(by: 1_000_000_000)
+        if ns.overflow { return retryMaxDelayNs }
+        return min(ns.partialValue, retryMaxDelayNs)
+    }
+
     private func send<Body: Encodable, Response: Decodable>(
         method: String,
         path: String,
         query: [URLQueryItem] = [],
         body: Body?
     ) async throws -> Response {
-        // Build URL via URLComponents so query strings survive intact and
-        // the path is not double-encoded by appendingPathComponent.
-        let basePath = config.baseURL.path
-        let trimmedBase = basePath.hasSuffix("/") ? String(basePath.dropLast()) : basePath
-        let normalizedPath = path.hasPrefix("/") ? path : "/\(path)"
+        // Build URL via URLComponents using `percentEncodedPath` so any
+        // encoding we already applied to the id segment is preserved
+        // verbatim. Assigning to `.path` decodes the input then re-encodes,
+        // turning an id like `abc%2Fdef` into `abc%252Fdef`.
         guard var components = URLComponents(url: config.baseURL, resolvingAgainstBaseURL: false) else {
             throw LedgerMemError.transport("invalid base URL")
         }
-        components.path = trimmedBase + normalizedPath
+        let basePath = components.percentEncodedPath
+        let trimmedBase = basePath.hasSuffix("/") ? String(basePath.dropLast()) : basePath
+        let normalizedPath = path.hasPrefix("/") ? path : "/\(path)"
+        components.percentEncodedPath = trimmedBase + normalizedPath
         if !query.isEmpty { components.queryItems = query }
         guard let url = components.url else {
             throw LedgerMemError.transport("failed to build URL")
@@ -162,13 +178,21 @@ public actor LedgerMemClient {
                         throw LedgerMemError.transport("Non-HTTP response")
                     }
                     if Self.isRetryable(status: httpResp.statusCode), attempt < config.maxRetries {
-                        try await Task.sleep(nanoseconds: Self.retryDelayNs(attempt: attempt))
+                        let hint = Self.retryAfterNs(from: httpResp)
+                        let delay = hint ?? Self.retryDelayNs(attempt: attempt)
+                        try await Task.sleep(nanoseconds: delay)
                         attempt += 1
                         continue
                     }
                     return (rawData, httpResp)
                 } catch is CancellationError {
                     throw CancellationError()
+                } catch let urlError as URLError where urlError.code == .cancelled {
+                    // URLSession reports caller cancellation as URLError(.cancelled);
+                    // treat it like a Swift cancellation rather than a retryable
+                    // failure, otherwise we would silently keep retrying after
+                    // the consumer has already abandoned the call.
+                    throw urlError
                 } catch {
                     lastError = error
                     if attempt < config.maxRetries {

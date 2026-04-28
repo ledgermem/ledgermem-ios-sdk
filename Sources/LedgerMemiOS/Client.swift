@@ -8,6 +8,11 @@ import FoundationNetworking
 /// Designed for application targets — the wrapper is thread-safe via an
 /// actor and uses a single `URLSession` per instance.
 public actor LedgerMemClient {
+    public static let defaultMaxRetries = 3
+    private static let sdkVersion = "0.1.0"
+    private static let retryBaseDelayNs: UInt64 = 200_000_000
+    private static let retryMaxDelayNs: UInt64 = 5_000_000_000
+
     public struct Configuration: Sendable {
         public var apiKey: String
         public var workspaceId: String
@@ -15,6 +20,7 @@ public actor LedgerMemClient {
         public var session: URLSession
         public var encoder: JSONEncoder
         public var decoder: JSONDecoder
+        public var maxRetries: Int
 
         public init(
             apiKey: String,
@@ -22,7 +28,8 @@ public actor LedgerMemClient {
             baseURL: URL = URL(string: "https://api.proofly.dev")!,
             session: URLSession = .shared,
             encoder: JSONEncoder = LedgerMemClient.defaultEncoder,
-            decoder: JSONDecoder = LedgerMemClient.defaultDecoder
+            decoder: JSONDecoder = LedgerMemClient.defaultDecoder,
+            maxRetries: Int = LedgerMemClient.defaultMaxRetries
         ) {
             self.apiKey = apiKey
             self.workspaceId = workspaceId
@@ -30,6 +37,7 @@ public actor LedgerMemClient {
             self.session = session
             self.encoder = encoder
             self.decoder = decoder
+            self.maxRetries = max(0, maxRetries)
         }
     }
 
@@ -86,8 +94,24 @@ public actor LedgerMemClient {
 
     private struct Empty: Codable {}
 
+    /// Percent-encode an identifier so it is safe to inject as a single path
+    /// segment. `.urlPathAllowed` keeps "/" intact, which would let an id
+    /// like "..%2F..%2Fadmin" smuggle in extra segments — restrict the
+    /// allowed set to RFC 3986 unreserved characters instead.
     private func escape(_ s: String) -> String {
-        s.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? s
+        var allowed = CharacterSet.alphanumerics
+        allowed.insert(charactersIn: "-._~")
+        return s.addingPercentEncoding(withAllowedCharacters: allowed) ?? s
+    }
+
+    private static func isRetryable(status: Int) -> Bool {
+        status == 429 || (500..<600).contains(status)
+    }
+
+    private static func retryDelayNs(attempt: Int) -> UInt64 {
+        let shift = min(attempt, 20)
+        let capped = min(retryBaseDelayNs &* (UInt64(1) << shift), retryMaxDelayNs)
+        return UInt64.random(in: 0...capped)
     }
 
     private func send<Body: Encodable, Response: Decodable>(
@@ -109,26 +133,53 @@ public actor LedgerMemClient {
         guard let url = components.url else {
             throw LedgerMemError.transport("failed to build URL")
         }
-        var request = URLRequest(url: url)
-        request.httpMethod = method
-        request.setValue("Bearer \(config.apiKey)", forHTTPHeaderField: "Authorization")
-        request.setValue(config.workspaceId, forHTTPHeaderField: "x-workspace-id")
-        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        // Pre-encode the body once; we may resend it across retries.
+        let encodedBody: Data?
         if let body {
-            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-            request.httpBody = try config.encoder.encode(body)
+            encodedBody = try config.encoder.encode(body)
+        } else {
+            encodedBody = nil
         }
 
-        let (data, response): (Data, URLResponse)
-        do {
-            (data, response) = try await config.session.data(for: request)
-        } catch {
-            throw LedgerMemError.transport(error.localizedDescription)
-        }
+        var attempt = 0
+        var lastError: Error?
+        let (data, http): (Data, HTTPURLResponse) = try await {
+            while true {
+                var request = URLRequest(url: url)
+                request.httpMethod = method
+                request.setValue("Bearer \(config.apiKey)", forHTTPHeaderField: "Authorization")
+                request.setValue(config.workspaceId, forHTTPHeaderField: "x-workspace-id")
+                request.setValue("application/json", forHTTPHeaderField: "Accept")
+                request.setValue("ledgermem-ios/\(Self.sdkVersion)", forHTTPHeaderField: "User-Agent")
+                if let encodedBody {
+                    request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+                    request.httpBody = encodedBody
+                }
 
-        guard let http = response as? HTTPURLResponse else {
-            throw LedgerMemError.transport("Non-HTTP response")
-        }
+                do {
+                    let (rawData, rawResponse) = try await config.session.data(for: request)
+                    guard let httpResp = rawResponse as? HTTPURLResponse else {
+                        throw LedgerMemError.transport("Non-HTTP response")
+                    }
+                    if Self.isRetryable(status: httpResp.statusCode), attempt < config.maxRetries {
+                        try await Task.sleep(nanoseconds: Self.retryDelayNs(attempt: attempt))
+                        attempt += 1
+                        continue
+                    }
+                    return (rawData, httpResp)
+                } catch is CancellationError {
+                    throw CancellationError()
+                } catch {
+                    lastError = error
+                    if attempt < config.maxRetries {
+                        try await Task.sleep(nanoseconds: Self.retryDelayNs(attempt: attempt))
+                        attempt += 1
+                        continue
+                    }
+                    throw LedgerMemError.transport((lastError ?? error).localizedDescription)
+                }
+            }
+        }()
 
         if !(200..<300).contains(http.statusCode) {
             throw decodeError(status: http.statusCode, data: data)

@@ -60,13 +60,10 @@ public actor LedgerMemClient {
     }
 
     public func list(cursor: String? = nil, limit: Int? = nil) async throws -> ListResult {
-        var components = URLComponents()
         var items: [URLQueryItem] = []
         if let cursor { items.append(URLQueryItem(name: "cursor", value: cursor)) }
         if let limit { items.append(URLQueryItem(name: "limit", value: String(limit))) }
-        components.queryItems = items.isEmpty ? nil : items
-        let query = components.percentEncodedQuery.flatMap { "?\($0)" } ?? ""
-        return try await send(method: "GET", path: "/v1/memories\(query)", body: Optional<Empty>.none)
+        return try await send(method: "GET", path: "/v1/memories", query: items, body: Optional<Empty>.none)
     }
 
     public func get(id: String) async throws -> Memory {
@@ -96,9 +93,22 @@ public actor LedgerMemClient {
     private func send<Body: Encodable, Response: Decodable>(
         method: String,
         path: String,
+        query: [URLQueryItem] = [],
         body: Body?
     ) async throws -> Response {
-        let url = config.baseURL.appendingPathComponent(path.hasPrefix("/") ? String(path.dropFirst()) : path)
+        // Build URL via URLComponents so query strings survive intact and
+        // the path is not double-encoded by appendingPathComponent.
+        let basePath = config.baseURL.path
+        let trimmedBase = basePath.hasSuffix("/") ? String(basePath.dropLast()) : basePath
+        let normalizedPath = path.hasPrefix("/") ? path : "/\(path)"
+        guard var components = URLComponents(url: config.baseURL, resolvingAgainstBaseURL: false) else {
+            throw LedgerMemError.transport("invalid base URL")
+        }
+        components.path = trimmedBase + normalizedPath
+        if !query.isEmpty { components.queryItems = query }
+        guard let url = components.url else {
+            throw LedgerMemError.transport("failed to build URL")
+        }
         var request = URLRequest(url: url)
         request.httpMethod = method
         request.setValue("Bearer \(config.apiKey)", forHTTPHeaderField: "Authorization")

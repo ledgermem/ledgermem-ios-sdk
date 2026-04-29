@@ -2,27 +2,27 @@
 import PackageDescription
 
 let package = Package(
-    name: "LedgerMemiOS",
+    name: "MnemoiOS",
     platforms: [
         .iOS(.v16),
         .macOS(.v13)
     ],
     products: [
-        .library(name: "LedgerMemiOS", targets: ["LedgerMemiOS"]),
+        .library(name: "MnemoiOS", targets: ["MnemoiOS"]),
     ],
     dependencies: [],
     targets: [
         .target(
-            name: "LedgerMemiOS",
-            path: "Sources/LedgerMemiOS",
+            name: "MnemoiOS",
+            path: "Sources/MnemoiOS",
             linkerSettings: [
                 .linkedLibrary("sqlite3")
             ]
         ),
         .testTarget(
-            name: "LedgerMemiOSTests",
-            dependencies: ["LedgerMemiOS"],
-            path: "Tests/LedgerMemiOSTests"
+            name: "MnemoiOSTests",
+            dependencies: ["MnemoiOS"],
+            path: "Tests/MnemoiOSTests"
         ),
     ]
 )

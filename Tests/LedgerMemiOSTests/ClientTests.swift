@@ -1,5 +1,5 @@
 import XCTest
-@testable import LedgerMemiOS
+@testable import MnemoiOS
 
 final class ClientTests: XCTestCase {
     override class func setUp() {
@@ -10,14 +10,14 @@ final class ClientTests: XCTestCase {
         MockURLProtocol.reset()
     }
 
-    private func makeClient() throws -> LedgerMemClient {
+    private func makeClient() throws -> MnemoClient {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [MockURLProtocol.self]
         let session = URLSession(configuration: configuration)
-        return try LedgerMemClient(config: .init(
+        return try MnemoClient(config: .init(
             apiKey: "key",
             workspaceId: "ws_test",
-            baseURL: URL(string: "https://api.proofly.dev")!,
+            baseURL: URL(string: "https://api.getmnemo.xyz")!,
             session: session
         ))
     }
@@ -82,7 +82,7 @@ final class ClientTests: XCTestCase {
         do {
             _ = try await client.list()
             XCTFail("expected failure")
-        } catch let LedgerMemError.http(status, message, code) {
+        } catch let MnemoError.http(status, message, code) {
             XCTAssertEqual(status, 401)
             XCTAssertEqual(message, "missing_workspace")
             XCTAssertEqual(code, "auth.invalid")

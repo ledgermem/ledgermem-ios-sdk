@@ -5,13 +5,13 @@ import SQLite3
 /// API directly so the package has zero third-party dependencies.
 public final class MemoryCache: @unchecked Sendable {
     private var db: OpaquePointer?
-    private let queue = DispatchQueue(label: "dev.proofly.ledgermem.cache")
+    private let queue = DispatchQueue(label: "dev.proofly.getmnemo.cache")
 
     public init(path: String) throws {
         var handle: OpaquePointer?
         let result = sqlite3_open(path, &handle)
         guard result == SQLITE_OK, let db = handle else {
-            throw LedgerMemError.transport("sqlite open failed: \(result)")
+            throw MnemoError.transport("sqlite open failed: \(result)")
         }
         self.db = db
         try migrate()
@@ -52,7 +52,7 @@ public final class MemoryCache: @unchecked Sendable {
             """
             var stmt: OpaquePointer?
             guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
-                throw LedgerMemError.transport("prepare failed: \(errorMessage())")
+                throw MnemoError.transport("prepare failed: \(errorMessage())")
             }
             defer { sqlite3_finalize(stmt) }
             let isoFormatter = ISO8601DateFormatter()
@@ -64,7 +64,7 @@ public final class MemoryCache: @unchecked Sendable {
             sqlite3_bind_text(stmt, 5, isoFormatter.string(from: memory.updatedAt), -1, SQLITE_TRANSIENT)
             sqlite3_bind_text(stmt, 6, memory.workspaceId, -1, SQLITE_TRANSIENT)
             guard sqlite3_step(stmt) == SQLITE_DONE else {
-                throw LedgerMemError.transport("upsert failed: \(errorMessage())")
+                throw MnemoError.transport("upsert failed: \(errorMessage())")
             }
         }
     }
@@ -78,7 +78,7 @@ public final class MemoryCache: @unchecked Sendable {
             var stmt: OpaquePointer?
             let sql = "SELECT id, text, tags, created_at, updated_at, workspace_id FROM memories ORDER BY updated_at DESC LIMIT ?;"
             guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
-                throw LedgerMemError.transport("prepare failed: \(errorMessage())")
+                throw MnemoError.transport("prepare failed: \(errorMessage())")
             }
             defer { sqlite3_finalize(stmt) }
             sqlite3_bind_int(stmt, 1, Int32(limit))
@@ -114,12 +114,12 @@ public final class MemoryCache: @unchecked Sendable {
         try queue.sync {
             var stmt: OpaquePointer?
             guard sqlite3_prepare_v2(db, "DELETE FROM memories WHERE id = ?;", -1, &stmt, nil) == SQLITE_OK else {
-                throw LedgerMemError.transport("prepare failed: \(errorMessage())")
+                throw MnemoError.transport("prepare failed: \(errorMessage())")
             }
             defer { sqlite3_finalize(stmt) }
             sqlite3_bind_text(stmt, 1, id, -1, SQLITE_TRANSIENT)
             guard sqlite3_step(stmt) == SQLITE_DONE else {
-                throw LedgerMemError.transport("delete failed: \(errorMessage())")
+                throw MnemoError.transport("delete failed: \(errorMessage())")
             }
         }
     }
@@ -131,7 +131,7 @@ public final class MemoryCache: @unchecked Sendable {
         guard sqlite3_exec(db, sql, nil, nil, &error) == SQLITE_OK else {
             let message = error.map { String(cString: $0) } ?? "unknown"
             sqlite3_free(error)
-            throw LedgerMemError.transport("sqlite exec: \(message)")
+            throw MnemoError.transport("sqlite exec: \(message)")
         }
     }
 

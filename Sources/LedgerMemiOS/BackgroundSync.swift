@@ -6,14 +6,14 @@ import Foundation
 /// recent memories so the cache stays warm.
 @available(iOS 16, *)
 public enum BackgroundSync {
-    public static let defaultIdentifier = "dev.proofly.ledgermem.sync"
+    public static let defaultIdentifier = "dev.proofly.getmnemo.sync"
 
     /// Register the handler with `BGTaskScheduler` once at app launch
     /// (typically from `application(_:didFinishLaunchingWithOptions:)`).
     @MainActor
     public static func register(
         identifier: String = defaultIdentifier,
-        client: LedgerMemClient,
+        client: MnemoClient,
         cache: MemoryCache,
         pageLimit: Int = 50
     ) {
@@ -38,7 +38,7 @@ public enum BackgroundSync {
 
     private static func handle(
         task: BGAppRefreshTask,
-        client: LedgerMemClient,
+        client: MnemoClient,
         cache: MemoryCache,
         pageLimit: Int
     ) {

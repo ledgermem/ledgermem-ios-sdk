@@ -3,11 +3,11 @@ import Foundation
 import FoundationNetworking
 #endif
 
-/// Async/await wrapper around the LedgerMem REST API.
+/// Async/await wrapper around the Mnemo REST API.
 ///
 /// Designed for application targets — the wrapper is thread-safe via an
 /// actor and uses a single `URLSession` per instance.
-public actor LedgerMemClient {
+public actor MnemoClient {
     public static let defaultMaxRetries = 3
     private static let sdkVersion = "0.1.0"
     private static let retryBaseDelayNs: UInt64 = 200_000_000
@@ -25,11 +25,11 @@ public actor LedgerMemClient {
         public init(
             apiKey: String,
             workspaceId: String,
-            baseURL: URL = URL(string: "https://api.proofly.dev")!,
+            baseURL: URL = URL(string: "https://api.getmnemo.xyz")!,
             session: URLSession = .shared,
-            encoder: JSONEncoder = LedgerMemClient.defaultEncoder,
-            decoder: JSONDecoder = LedgerMemClient.defaultDecoder,
-            maxRetries: Int = LedgerMemClient.defaultMaxRetries
+            encoder: JSONEncoder = MnemoClient.defaultEncoder,
+            decoder: JSONDecoder = MnemoClient.defaultDecoder,
+            maxRetries: Int = MnemoClient.defaultMaxRetries
         ) {
             self.apiKey = apiKey
             self.workspaceId = workspaceId
@@ -56,8 +56,8 @@ public actor LedgerMemClient {
     public let config: Configuration
 
     public init(config: Configuration) throws {
-        guard !config.apiKey.isEmpty else { throw LedgerMemError.invalidConfiguration("apiKey is empty") }
-        guard !config.workspaceId.isEmpty else { throw LedgerMemError.invalidConfiguration("workspaceId is empty") }
+        guard !config.apiKey.isEmpty else { throw MnemoError.invalidConfiguration("apiKey is empty") }
+        guard !config.workspaceId.isEmpty else { throw MnemoError.invalidConfiguration("workspaceId is empty") }
         self.config = config
     }
 
@@ -139,7 +139,7 @@ public actor LedgerMemClient {
         // verbatim. Assigning to `.path` decodes the input then re-encodes,
         // turning an id like `abc%2Fdef` into `abc%252Fdef`.
         guard var components = URLComponents(url: config.baseURL, resolvingAgainstBaseURL: false) else {
-            throw LedgerMemError.transport("invalid base URL")
+            throw MnemoError.transport("invalid base URL")
         }
         let basePath = components.percentEncodedPath
         let trimmedBase = basePath.hasSuffix("/") ? String(basePath.dropLast()) : basePath
@@ -147,7 +147,7 @@ public actor LedgerMemClient {
         components.percentEncodedPath = trimmedBase + normalizedPath
         if !query.isEmpty { components.queryItems = query }
         guard let url = components.url else {
-            throw LedgerMemError.transport("failed to build URL")
+            throw MnemoError.transport("failed to build URL")
         }
         // Pre-encode the body once; we may resend it across retries.
         let encodedBody: Data?
@@ -166,7 +166,7 @@ public actor LedgerMemClient {
                 request.setValue("Bearer \(config.apiKey)", forHTTPHeaderField: "Authorization")
                 request.setValue(config.workspaceId, forHTTPHeaderField: "x-workspace-id")
                 request.setValue("application/json", forHTTPHeaderField: "Accept")
-                request.setValue("ledgermem-ios/\(Self.sdkVersion)", forHTTPHeaderField: "User-Agent")
+                request.setValue("getmnemo-ios/\(Self.sdkVersion)", forHTTPHeaderField: "User-Agent")
                 if let encodedBody {
                     request.setValue("application/json", forHTTPHeaderField: "Content-Type")
                     request.httpBody = encodedBody
@@ -175,7 +175,7 @@ public actor LedgerMemClient {
                 do {
                     let (rawData, rawResponse) = try await config.session.data(for: request)
                     guard let httpResp = rawResponse as? HTTPURLResponse else {
-                        throw LedgerMemError.transport("Non-HTTP response")
+                        throw MnemoError.transport("Non-HTTP response")
                     }
                     if Self.isRetryable(status: httpResp.statusCode), attempt < config.maxRetries {
                         let hint = Self.retryAfterNs(from: httpResp)
@@ -200,7 +200,7 @@ public actor LedgerMemClient {
                         attempt += 1
                         continue
                     }
-                    throw LedgerMemError.transport((lastError ?? error).localizedDescription)
+                    throw MnemoError.transport((lastError ?? error).localizedDescription)
                 }
             }
         }()
@@ -219,11 +219,11 @@ public actor LedgerMemClient {
         do {
             return try config.decoder.decode(Response.self, from: data)
         } catch {
-            throw LedgerMemError.decoding(error.localizedDescription)
+            throw MnemoError.decoding(error.localizedDescription)
         }
     }
 
-    private func decodeError(status: Int, data: Data) -> LedgerMemError {
+    private func decodeError(status: Int, data: Data) -> MnemoError {
         struct Body: Decodable { let error: String?; let code: String? }
         let body = (try? JSONDecoder().decode(Body.self, from: data))
         return .http(status: status, message: body?.error ?? "request failed", code: body?.code)

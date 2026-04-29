@@ -91,7 +91,7 @@ public struct ListResult: Codable, Sendable, Equatable {
     }
 }
 
-public enum LedgerMemError: Error, Sendable, Equatable, LocalizedError {
+public enum MnemoError: Error, Sendable, Equatable, LocalizedError {
     case invalidConfiguration(String)
     case http(status: Int, message: String, code: String?)
     case decoding(String)
